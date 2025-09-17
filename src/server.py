@@ -2,6 +2,7 @@
 import os
 import requests
 import time
+import threading
 from typing import Dict, List, Optional, Any
 from fastmcp import FastMCP
 
@@ -334,11 +335,28 @@ def health_check() -> dict:
         }
     }
 
+def keep_alive():
+    """Keep the server alive by making periodic requests"""
+    while True:
+        try:
+            # Make a simple request to keep the server warm
+            requests.get(f"http://localhost:{os.environ.get('PORT', 8000)}/mcp", timeout=5)
+            print("Keep-alive ping sent")
+        except:
+            pass  # Ignore errors, just keep trying
+        time.sleep(300)  # Ping every 5 minutes
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     host = "0.0.0.0"
     
     print(f"Starting FastMCP server on {host}:{port}")
+    
+    # Start keep-alive thread in production
+    if os.environ.get("ENVIRONMENT") == "production":
+        keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
+        keep_alive_thread.start()
+        print("Keep-alive thread started")
     
     mcp.run(
         transport="http",
