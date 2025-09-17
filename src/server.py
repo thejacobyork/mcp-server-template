@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import requests
+import time
 from typing import Dict, List, Optional, Any
 from fastmcp import FastMCP
 
@@ -21,14 +22,19 @@ class SleeperAPI:
         })
     
     def get_user_by_username(self, username: str) -> Optional[Dict]:
-        """Get user information by username"""
-        try:
-            response = self.session.get(f"{self.base_url}/user/{username}")
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            print(f"Error fetching user {username}: {e}")
-            return None
+        """Get user information by username with retry logic"""
+        for attempt in range(3):
+            try:
+                response = self.session.get(f"{self.base_url}/user/{username}", timeout=10)
+                response.raise_for_status()
+                return response.json()
+            except requests.RequestException as e:
+                print(f"Error fetching user {username} (attempt {attempt + 1}): {e}")
+                if attempt < 2:  # Don't sleep on last attempt
+                    time.sleep(1 * (attempt + 1))  # Exponential backoff
+                else:
+                    return None
+        return None
     
     def get_user_leagues(self, user_id: str, season: str = "2024") -> List[Dict]:
         """Get all leagues for a user in a specific season"""
@@ -311,6 +317,28 @@ def get_server_info() -> dict:
         "environment": os.environ.get("ENVIRONMENT", "development"),
         "python_version": os.sys.version.split()[0],
         "description": "MCP server for interacting with Sleeper Fantasy Football API"
+    }
+
+# Add health check endpoint
+@mcp.app.get("/health")
+async def health_check():
+    """Health check endpoint for Render and monitoring"""
+    return {
+        "status": "healthy",
+        "server": "Sleeper Fantasy Football MCP Server",
+        "timestamp": __import__("datetime").datetime.now().isoformat(),
+        "version": "1.0.0"
+    }
+
+# Add root endpoint for basic connectivity
+@mcp.app.get("/")
+async def root():
+    """Root endpoint for basic connectivity testing"""
+    return {
+        "message": "Sleeper Fantasy Football MCP Server is running",
+        "mcp_endpoint": "/mcp",
+        "health_endpoint": "/health",
+        "status": "operational"
     }
 
 if __name__ == "__main__":
