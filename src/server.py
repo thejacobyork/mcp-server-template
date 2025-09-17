@@ -68,14 +68,19 @@ class SleeperAPI:
             return []
     
     def get_league_matchups(self, league_id: str, week: int) -> List[Dict]:
-        """Get matchups for a specific week in a league"""
-        try:
-            response = self.session.get(f"{self.base_url}/league/{league_id}/matchups/{week}")
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            print(f"Error fetching matchups for league {league_id}, week {week}: {e}")
-            return []
+        """Get matchups for a specific week in a league with retry logic"""
+        for attempt in range(3):
+            try:
+                response = self.session.get(f"{self.base_url}/league/{league_id}/matchups/{week}", timeout=15)
+                response.raise_for_status()
+                return response.json()
+            except requests.RequestException as e:
+                print(f"Error fetching matchups for league {league_id}, week {week} (attempt {attempt + 1}): {e}")
+                if attempt < 2:
+                    time.sleep(2 * (attempt + 1))  # Exponential backoff
+                else:
+                    return []
+        return []
     
     def get_nfl_state(self) -> Optional[Dict]:
         """Get current NFL state including current week"""
@@ -201,16 +206,22 @@ def get_user_lineup(username: str, league_id: str) -> Dict:
     if not user_matchup:
         return {"error": f"No matchup found for user in week {current_week}"}
     
-    # Get opponent info
-    opponent_roster_id = user_matchup.get("matchup_id")
+    # Get opponent info - fix the matchup logic
+    opponent_roster_id = None
+    for matchup in matchups:
+        if (matchup.get("roster_id") != user_roster["roster_id"] and 
+            matchup.get("matchup_id") == user_matchup.get("matchup_id")):
+            opponent_roster_id = matchup.get("roster_id")
+            break
+    
     opponent_roster = None
     opponent_user = None
-    
-    for roster in rosters:
-        if roster.get("roster_id") == opponent_roster_id:
-            opponent_roster = roster
-            opponent_user = user_map.get(roster.get("owner_id"))
-            break
+    if opponent_roster_id:
+        for roster in rosters:
+            if roster.get("roster_id") == opponent_roster_id:
+                opponent_roster = roster
+                opponent_user = user_map.get(roster.get("owner_id"))
+                break
     
     # Get players data
     players = sleeper_api.get_players()
@@ -233,29 +244,49 @@ def get_user_lineup(username: str, league_id: str) -> Dict:
         } if opponent_roster else None
     }
     
-    # Process starters
+    # Process starters with better error handling
     starters = user_roster.get("starters", [])
-    for player_id in starters:
-        if player_id and player_id in players:
-            player = players[player_id]
-            lineup["starters"].append({
-                "player_id": player_id,
-                "name": player.get("full_name"),
-                "position": player.get("position"),
-                "team": player.get("team")
-            })
+    if not starters:
+        lineup["starters"] = [{"error": "No starters found in roster"}]
+    else:
+        for player_id in starters:
+            if player_id and player_id in players:
+                player = players[player_id]
+                lineup["starters"].append({
+                    "player_id": player_id,
+                    "name": player.get("full_name", "Unknown"),
+                    "position": player.get("position", "Unknown"),
+                    "team": player.get("team", "Unknown")
+                })
+            elif player_id:
+                lineup["starters"].append({
+                    "player_id": player_id,
+                    "name": "Player not found",
+                    "position": "Unknown",
+                    "team": "Unknown"
+                })
     
-    # Process bench players
+    # Process bench players with better error handling
     bench = user_roster.get("reserve", []) + user_roster.get("taxi", [])
-    for player_id in bench:
-        if player_id and player_id in players:
-            player = players[player_id]
-            lineup["bench"].append({
-                "player_id": player_id,
-                "name": player.get("full_name"),
-                "position": player.get("position"),
-                "team": player.get("team")
-            })
+    if not bench:
+        lineup["bench"] = [{"info": "No bench players found"}]
+    else:
+        for player_id in bench:
+            if player_id and player_id in players:
+                player = players[player_id]
+                lineup["bench"].append({
+                    "player_id": player_id,
+                    "name": player.get("full_name", "Unknown"),
+                    "position": player.get("position", "Unknown"),
+                    "team": player.get("team", "Unknown")
+                })
+            elif player_id:
+                lineup["bench"].append({
+                    "player_id": player_id,
+                    "name": "Player not found",
+                    "position": "Unknown",
+                    "team": "Unknown"
+                })
     
     return lineup
 
@@ -334,6 +365,58 @@ def health_check() -> dict:
             "health": "use health_check tool"
         }
     }
+
+@mcp.tool(description="Debug tool to diagnose lineup retrieval issues")
+def debug_user_roster(username: str, league_id: str) -> dict:
+    """Debug tool to help diagnose lineup issues"""
+    try:
+        # Get user info
+        user = sleeper_api.get_user_by_username(username)
+        if not user:
+            return {"error": f"User '{username}' not found"}
+        
+        # Get league rosters
+        rosters = sleeper_api.get_league_rosters(league_id)
+        if not rosters:
+            return {"error": f"Unable to fetch rosters for league {league_id}"}
+        
+        # Find user's roster
+        user_roster = None
+        for roster in rosters:
+            if roster.get("owner_id") == user["user_id"]:
+                user_roster = roster
+                break
+        
+        if not user_roster:
+            return {"error": f"User '{username}' not found in league {league_id}"}
+        
+        # Get NFL state
+        nfl_state = sleeper_api.get_nfl_state()
+        
+        return {
+            "user": {
+                "user_id": user["user_id"],
+                "username": user["username"]
+            },
+            "league_id": league_id,
+            "nfl_state": nfl_state,
+            "roster": {
+                "roster_id": user_roster.get("roster_id"),
+                "owner_id": user_roster.get("owner_id"),
+                "starters": user_roster.get("starters", []),
+                "reserve": user_roster.get("reserve", []),
+                "taxi": user_roster.get("taxi", []),
+                "settings": user_roster.get("settings", {})
+            },
+            "debug_info": {
+                "starters_count": len(user_roster.get("starters", [])),
+                "reserve_count": len(user_roster.get("reserve", [])),
+                "taxi_count": len(user_roster.get("taxi", [])),
+                "current_week": nfl_state.get("week") if nfl_state else "Unknown"
+            }
+        }
+    except Exception as e:
+        return {"error": f"Debug failed: {str(e)}"}
 
 def keep_alive():
     """Keep the server alive by making periodic requests"""
