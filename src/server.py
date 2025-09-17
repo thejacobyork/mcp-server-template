@@ -319,26 +319,19 @@ def get_server_info() -> dict:
         "description": "MCP server for interacting with Sleeper Fantasy Football API"
     }
 
-# Add health check endpoint
-@mcp.app.get("/health")
-async def health_check():
-    """Health check endpoint for Render and monitoring"""
+# Add health check tool for monitoring
+@mcp.tool(description="Health check endpoint for monitoring server status")
+def health_check() -> dict:
+    """Health check for Render and monitoring"""
     return {
         "status": "healthy",
         "server": "Sleeper Fantasy Football MCP Server",
         "timestamp": __import__("datetime").datetime.now().isoformat(),
-        "version": "1.0.0"
-    }
-
-# Add root endpoint for basic connectivity
-@mcp.app.get("/")
-async def root():
-    """Root endpoint for basic connectivity testing"""
-    return {
-        "message": "Sleeper Fantasy Football MCP Server is running",
-        "mcp_endpoint": "/mcp",
-        "health_endpoint": "/health",
-        "status": "operational"
+        "version": "1.0.0",
+        "endpoints": {
+            "mcp": "/mcp",
+            "health": "use health_check tool"
+        }
     }
 
 if __name__ == "__main__":
