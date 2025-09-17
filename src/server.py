@@ -420,14 +420,31 @@ def debug_user_roster(username: str, league_id: str) -> dict:
 
 def keep_alive():
     """Keep the server alive by making periodic requests"""
+    import urllib.request
+    import urllib.error
+    
     while True:
         try:
-            # Make a simple request to keep the server warm
-            requests.get(f"http://localhost:{os.environ.get('PORT', 8000)}/mcp", timeout=5)
-            print("Keep-alive ping sent")
-        except:
-            pass  # Ignore errors, just keep trying
-        time.sleep(300)  # Ping every 5 minutes
+            # Use urllib for more reliable local requests
+            port = os.environ.get('PORT', 8000)
+            url = f"http://localhost:{port}/mcp"
+            
+            # Make a simple HEAD request to keep server warm
+            req = urllib.request.Request(url, method='HEAD')
+            urllib.request.urlopen(req, timeout=10)
+            print(f"Keep-alive ping sent to {url}")
+        except Exception as e:
+            print(f"Keep-alive ping failed: {e}")
+            # Try alternative approach
+            try:
+                import subprocess
+                subprocess.run(['curl', '-s', '-o', '/dev/null', f'http://localhost:{port}/mcp'], 
+                             timeout=10, check=False)
+                print("Keep-alive via curl successful")
+            except:
+                print("All keep-alive methods failed")
+        
+        time.sleep(180)  # Ping every 3 minutes (more frequent)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
@@ -440,6 +457,9 @@ if __name__ == "__main__":
         keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
         keep_alive_thread.start()
         print("Keep-alive thread started")
+    
+    # Note: FastMCP handles HTTP endpoints differently
+    # The keep-alive mechanism should prevent server sleep
     
     mcp.run(
         transport="http",
